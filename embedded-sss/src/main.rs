@@ -4,6 +4,8 @@
 
 use embedded_sss as _; // global logger + panicking-behavior + memory layout
 
+rtic_monotonics::systick_monotonic!(Mono, 1_000);
+
 #[rtic::app(
     device = stm32h7xx_hal::pac,
     // No longer a TODO: Replace the `FreeInterrupt1, ...` with free interrupt vectors if software tasks are used
@@ -17,25 +19,20 @@ use embedded_sss as _; // global logger + panicking-behavior + memory layout
     peripherals = true
 )]
 mod app {
-    use defmt::debug;
+    use defmt::{debug, info};
     use display_interface_spi::SPIInterface;
     use embedded_graphics::{draw_target::DrawTarget, prelude::*};
-    use ft6x06_rs::FT6x06;
-    use hal::{
-        gpio::{Output, Pin},
-        hal::{
-            digital::v2::{OutputPin, ToggleableOutputPin},
-            spi,
-        },
-        pac,
-        prelude::*,
-        pwr::PwrExt,
-        rcc::RccExt,
-        spi::Spi,
-        timer::Timer,
-    };
+    use embedded_hal_bus::spi::ExclusiveDevice;
+    use embedded_hal_compat::ForwardCompat;
+    use embedded_sss::Eh1I2cWrapper;
+    use ft6x06_rs::{ControlMode, FT6x06, InterruptMode};
     use ili9341::Ili9341;
-    use stm32h7xx_hal::{self as hal, delay::Delay};
+    use rtic_monotonics::Monotonic;
+    use stm32h7xx_hal::{
+        self as hal, delay::DelayFromCountDownTimer, pac, prelude::*, pwr::PwrExt, rcc::RccExt, spi,
+    };
+
+    use crate::Mono;
 
     // Shared resources go here
     #[shared]
@@ -44,18 +41,13 @@ mod app {
     // Local resources go here
     #[local]
     struct Local {
-        // red_led: Pin<'B', 14, Output>,
-        // timer: Timer<pac::TIM2>,
+        ft6x06: FT6x06<Eh1I2cWrapper<stm32h7xx_hal::i2c::I2c<pac::I2C1>>>,
     }
 
     #[init]
     fn init(cx: init::Context) -> (Shared, Local) {
-        defmt::info!("init");
+        info!("init");
 
-        // TODO setup monotonic if used
-        // let sysclk = { /* clock setup + returning sysclk as an u32 */ };
-        // let token = rtic_monotonics::create_systick_token!();
-        // rtic_monotonics::systick::Systick::new(cx.core.SYST, sysclk, token);
         debug!("No Periphs taken");
         let cp = cx.core;
         let dp = cx.device;
@@ -87,6 +79,8 @@ mod app {
             ccdr.clocks.pclk1().to_MHz()
         );
 
+        Mono::start(cp.SYST, ccdr.clocks.sys_ck().to_Hz());
+
         let gpioa = dp.GPIOA.split(ccdr.peripheral.GPIOA);
         let gpiob = dp.GPIOB.split(ccdr.peripheral.GPIOB);
         let gpiod = dp.GPIOD.split(ccdr.peripheral.GPIOD);
@@ -106,13 +100,16 @@ mod app {
         let display_cs = gpiod.pd14.into_push_pull_output();
         let dc = gpiod.pd15.into_push_pull_output();
         let rst = gpiob.pb1.into_push_pull_output();
-        let mut delay = Delay::new(cp.SYST, ccdr.clocks);
+        let spi_device =
+            ExclusiveDevice::new_no_delay(spi.forward(), display_cs.forward()).unwrap();
+        let timer2 = dp.TIM2.timer(1.kHz(), ccdr.peripheral.TIM2, &ccdr.clocks);
+        let delay = DelayFromCountDownTimer::new(timer2);
 
-        let interface = SPIInterface::new(spi, dc, display_cs);
+        let interface = SPIInterface::new(spi_device, dc.forward());
         let mut display = Ili9341::new(
             interface,
-            rst,
-            &mut delay,
+            rst.forward(),
+            &mut delay.forward(),
             ili9341::Orientation::Portrait,
             ili9341::DisplaySize240x320,
         )
@@ -122,15 +119,60 @@ mod app {
             .clear(embedded_graphics::pixelcolor::Rgb565::BLACK)
             .unwrap();
 
-        (Shared {}, Local {})
+        let scl = gpiob.pb8.into_alternate_open_drain(); // I2C1 is AF 4
+        let sda = gpiob.pb9.into_alternate_open_drain();
+        let i2c = dp
+            .I2C1
+            .i2c((scl, sda), 1.MHz(), ccdr.peripheral.I2C1, &ccdr.clocks);
+        let wrapped_i2c = Eh1I2cWrapper::new(i2c);
+
+        let mut dev = FT6x06::new(wrapped_i2c);
+
+        // Configure the device.
+        dev.set_interrupt_mode(InterruptMode::Trigger).unwrap();
+        dev.set_control_mode(ControlMode::MonitorIdle).unwrap();
+        dev.set_active_idle_timeout(10).unwrap();
+        dev.set_report_rates(60, 25).unwrap();
+
+        // Read the device configuration.
+        let interrupt_mode = dev.get_interrupt_mode().unwrap();
+        let control_mode = dev.get_control_mode().unwrap();
+        let active_idle_timeout = dev.get_active_idle_timeout().unwrap();
+        let (active_rate, monitor_rate) = dev.get_report_rates().unwrap();
+
+        info!("Irq Mode: {}", interrupt_mode);
+        info!("Ctrl Mode: {}", control_mode);
+        info!("Active Idle Timeout: {}", active_idle_timeout);
+        info!("Active Rate: {}", active_rate);
+        info!("Monitor Rate: {}", monitor_rate);
+
+        // Get the latest touch data. Usually after receiving an interrupt from the device.
+
+        poll_touch::spawn().unwrap();
+        (Shared {}, Local { ft6x06: dev })
     }
 
     #[idle]
     fn idle(_: idle::Context) -> ! {
-        defmt::info!("idle");
+        info!("idle");
 
         loop {
             continue;
+        }
+    }
+
+    #[task(priority = 1, local = [ft6x06])]
+    async fn poll_touch(ctx: poll_touch::Context) {
+        loop {
+            debug!("Getting touch event");
+            let touch_event = ctx.local.ft6x06.get_touch_event().unwrap();
+            if let Some(event) = touch_event {
+                info!(
+                    "Touch detected at: x: {}, y: {}",
+                    event.primary_point.x, event.primary_point.y
+                );
+            }
+            Mono::delay(50.millis()).await;
         }
     }
 }
