@@ -9,21 +9,17 @@ cortex-m-rt = { version = "0.7.5", features = ["device"] }
 defmt = { version = "0.3", features = ["encoding-rzcobs"] }
 defmt-brtt = { version = "0.1", default-features = false, features = ["rtt"] }
 display-interface-spi = "0.5.0"
+embassy-stm32 = { version = "0.2.0", features = ["defmt", "stm32h755zi-cm7", "unstable-pac"] }
+embassy-time = { version = "0.4.0" }
 embedded-graphics = { version = "0.8.1", features = ["defmt"] }
 embedded-hal = "1.0.0"
-embedded-hal-02 = { package = "embedded-hal", version = "0.2.6" }
 embedded-hal-bus = "0.3.0"
-embedded-hal-compat = { version = "0.13.0", features = [] }
 ft6x06-rs = "0.3.0"
+fugit = { version = "0.3.7", features = ["defmt"] }
 ili9341 = "0.6.0"
 panic-probe = { version = "0.3", features = ["print-defmt"] }
 rtic = { version = "2.0.0", features = [ "thumbv7-backend" ] }
 rtic-monotonics = { version = "2.1.0", features = ["cortex-m-systick"] }
-stm32h7xx-hal = { version = "0.16.0", features = ["stm32h747cm7", "rt", "smps"] }
-
-# [dependencies.stm32h7xx-hal]
-# path = "../stm32h7xx-hal/"
-# features = ["stm32h747cm7", "rt", "smps", "eh1"]
 
 # cargo build/run
 [profile.dev]

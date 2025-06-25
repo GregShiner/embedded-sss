@@ -4,9 +4,10 @@
 use core::sync::atomic::{AtomicUsize, Ordering};
 use defmt_brtt as _; // global logger
 
+use embassy_stm32::time::Hertz;
 use panic_probe as _;
 
-use stm32h7xx_hal as _; // memory layout
+use embassy_stm32 as _; // memory layout
 
 // same panicking *behavior* as `panic-probe` but doesn't print a panic message
 // this prevents the panic message being printed *twice* when `defmt::panic` is invoked
@@ -30,75 +31,35 @@ pub fn exit() -> ! {
     }
 }
 
-use embedded_hal::i2c::{self, I2c, Operation, SevenBitAddress};
+use embassy_stm32::timer::low_level::Timer;
+use embedded_hal::delay::DelayNs;
 
-/// I2C0 hardware peripheral which supports both 7-bit and 10-bit addressing.
-pub struct Eh1I2cWrapper<I2C> {
-    inner: I2C,
-}
-
-#[derive(Debug)]
-pub struct Eh1I2cError(pub stm32h7xx_hal::i2c::Error);
-
-impl<I2C> Eh1I2cWrapper<I2C> {
-    fn inner(&self) -> &I2C {
-        &self.inner
-    }
-
-    fn inner_mut(&mut self) -> &I2C {
-        &mut self.inner
-    }
-
-    pub fn new(i2c: I2C) -> Self {
-        Self { inner: i2c }
-    }
-}
-
-impl i2c::Error for Eh1I2cError {
-    fn kind(&self) -> i2c::ErrorKind {
-        use i2c::{ErrorKind, NoAcknowledgeSource};
-        use stm32h7xx_hal::i2c::Error;
-        match self.0 {
-            Error::Bus => ErrorKind::Bus,
-            Error::Arbitration => ErrorKind::ArbitrationLoss,
-            Error::NotAcknowledge => ErrorKind::NoAcknowledge(NoAcknowledgeSource::Unknown),
-            _ => ErrorKind::Other,
-        }
-    }
-}
-
-impl<I2C> i2c::ErrorType for Eh1I2cWrapper<I2C>
+pub struct TimerDelay<T>
 where
-    I2C: embedded_hal_02::blocking::i2c::Write<Error = stm32h7xx_hal::i2c::Error>
-        + embedded_hal_02::blocking::i2c::Read<Error = stm32h7xx_hal::i2c::Error>
-        + embedded_hal_02::blocking::i2c::WriteRead<Error = stm32h7xx_hal::i2c::Error>,
+    T: embassy_stm32::timer::CoreInstance,
 {
-    type Error = Eh1I2cError;
+    timer: Timer<'static, T>,
 }
 
-impl From<stm32h7xx_hal::i2c::Error> for Eh1I2cError {
-    fn from(e: stm32h7xx_hal::i2c::Error) -> Self {
-        Self(e)
+impl<T: embassy_stm32::timer::CoreInstance> TimerDelay<T> {
+    pub fn new(timer: Timer<'static, T>) -> Self {
+        Self { timer }
     }
 }
 
-impl<I2C> I2c<SevenBitAddress> for Eh1I2cWrapper<I2C>
-where
-    I2C: embedded_hal_02::blocking::i2c::Write<Error = stm32h7xx_hal::i2c::Error>
-        + embedded_hal_02::blocking::i2c::Read<Error = stm32h7xx_hal::i2c::Error>
-        + embedded_hal_02::blocking::i2c::WriteRead<Error = stm32h7xx_hal::i2c::Error>,
-{
-    fn transaction(
-        &mut self,
-        address: u8,
-        operations: &mut [Operation<'_>],
-    ) -> Result<(), Self::Error> {
-        for operation in operations {
-            match operation {
-                Operation::Read(buffer) => self.inner.read(address, buffer)?,
-                Operation::Write(buffer) => self.inner.write(address, buffer)?,
-            };
-        }
-        Ok(())
+impl<T: embassy_stm32::timer::CoreInstance> DelayNs for TimerDelay<T> {
+    fn delay_ns(&mut self, ns: u32) {
+        let frequency = 1_000_000_000 / ns; // This does floor division which is idea bc rounding
+                                            // frequency down will only make the delay longer, not shorter, which is preferable.
+        self.timer.stop();
+        self.timer.set_frequency(Hertz::hz(frequency));
+        self.timer.reset();
+        self.timer.start();
+
+        let reset_reg = self.timer.regs_core().sr();
+
+        while !reset_reg.read().uif() {}
+
+        reset_reg.modify(|reg| reg.set_uif(false));
     }
 }

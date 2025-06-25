@@ -2,12 +2,17 @@
 #![no_std]
 #![feature(type_alias_impl_trait)]
 
+use core::mem::MaybeUninit;
+
 use embedded_sss as _; // global logger + panicking-behavior + memory layout
 
 rtic_monotonics::systick_monotonic!(Mono, 1_000);
 
+#[link_section = ".axisram"]
+static SHARED_DATA: MaybeUninit<embassy_stm32::SharedData> = MaybeUninit::uninit();
+
 #[rtic::app(
-    device = stm32h7xx_hal::pac,
+    device = embassy_stm32,
     // No longer a TODO: Replace the `FreeInterrupt1, ...` with free interrupt vectors if software tasks are used
     //
     // You can usually find the names of the interrupt vectors in the some_hal::pac::interrupt enum.
@@ -21,18 +26,17 @@ rtic_monotonics::systick_monotonic!(Mono, 1_000);
 mod app {
     use defmt::{debug, info};
     use display_interface_spi::SPIInterface;
+    use embassy_stm32::{self as hal, gpio, i2c, rcc, spi, time::mhz, timer};
     use embedded_graphics::{draw_target::DrawTarget, prelude::*};
+    use embedded_hal::delay::DelayNs;
     use embedded_hal_bus::spi::ExclusiveDevice;
-    use embedded_hal_compat::ForwardCompat;
-    use embedded_sss::Eh1I2cWrapper;
+    use embedded_sss::TimerDelay;
     use ft6x06_rs::{ControlMode, FT6x06, InterruptMode};
+    use fugit::ExtU32;
     use ili9341::Ili9341;
     use rtic_monotonics::Monotonic;
-    use stm32h7xx_hal::{
-        self as hal, delay::DelayFromCountDownTimer, pac, prelude::*, pwr::PwrExt, rcc::RccExt, spi,
-    };
 
-    use crate::Mono;
+    use crate::{Mono, SHARED_DATA};
 
     // Shared resources go here
     #[shared]
@@ -41,92 +45,69 @@ mod app {
     // Local resources go here
     #[local]
     struct Local {
-        ft6x06: FT6x06<Eh1I2cWrapper<stm32h7xx_hal::i2c::I2c<pac::I2C1>>>,
+        ft6x06: FT6x06<i2c::I2c<'static, hal::mode::Blocking>>,
     }
 
     #[init]
     fn init(cx: init::Context) -> (Shared, Local) {
         info!("init");
 
-        debug!("No Periphs taken");
         let cp = cx.core;
-        let dp = cx.device;
-        // Hold CM4 core in reset to avoid conflicts
-        debug!("Periphs taken");
-        let pwr = dp.PWR.constrain();
-        debug!("Power constrained");
-        let pwrcfg = pwr.smps().freeze();
-        debug!("Power frozen");
-        match pwrcfg.vos() {
-            hal::pwr::VoltageScale::Scale0 => debug!("Scale0"),
-            hal::pwr::VoltageScale::Scale1 => debug!("Scale1"),
-            hal::pwr::VoltageScale::Scale2 => debug!("Scale2"),
-            hal::pwr::VoltageScale::Scale3 => debug!("Scale3"),
-        }
 
-        let rcc = dp.RCC.constrain();
-        debug!("Clocks constrained");
-        let ccdr = rcc
-            .sys_ck(400.MHz()) // I'm not quite sure why I can't set these to 480 and 120
-            // respectively even in VOS0
-            .pclk1(100.MHz())
-            .pll1_q_ck(32.MHz())
-            .freeze(pwrcfg, &dp.SYSCFG);
-        debug!("Clocks set");
-        debug!(
-            "sys_ck: {} pclk1: {}",
-            ccdr.clocks.sys_ck().to_MHz(),
-            ccdr.clocks.pclk1().to_MHz()
-        );
+        let mut config = hal::Config::default();
+        config.rcc.pll1 = Some(rcc::Pll {
+            source: rcc::PllSource::HSI,    // 64 MHz -> DIVM1
+            prediv: rcc::PllPreDiv::DIV4,   // DIVM1 = 4: 16 MHz -> DIVN1
+            mul: rcc::PllMul::MUL60,        // DIVN1 = 60: 960 MHz -> DIVP1 + DIVQ1 + DIVR1
+            divp: Some(rcc::PllDiv::DIV2),  // DIVP1 = 2: 480 MHz -> System clock + more
+            divq: Some(rcc::PllDiv::DIV16), // DIVQ1 = 16: 60 MHz -> SPI1 + more
+            divr: None,                     // Disabled
+        });
+        // Set the system clock source to PLL1
+        config.rcc.sys = rcc::Sysclk::PLL1_P;
+        // Divide some peripheral prescalers to keep them within limits
+        config.rcc.ahb_pre = rcc::AHBPrescaler::DIV2; // HPRE Prescaler
+        config.rcc.apb1_pre = rcc::APBPrescaler::DIV2; // D2PRE1
+        config.rcc.apb2_pre = rcc::APBPrescaler::DIV2; // D2PRE2
+        config.rcc.apb3_pre = rcc::APBPrescaler::DIV2; // D1PRE
+        config.rcc.apb4_pre = rcc::APBPrescaler::DIV2; // D3PRE
 
-        Mono::start(cp.SYST, ccdr.clocks.sys_ck().to_Hz());
+        debug!("Initializing HAL...");
+        let p = hal::init_primary(config, &SHARED_DATA);
+        debug!("HAL Initialized");
 
-        let gpioa = dp.GPIOA.split(ccdr.peripheral.GPIOA);
-        let gpiob = dp.GPIOB.split(ccdr.peripheral.GPIOB);
-        let gpiod = dp.GPIOD.split(ccdr.peripheral.GPIOD);
+        Mono::start(cp.SYST, 480_000_000); // 480 MHz System Clock
+        debug!("Monotonic Started");
 
-        let sck = gpioa.pa5.into_alternate::<5>(); // SPI1 is alternate function 5
-        let miso = gpioa.pa6.into_alternate::<5>();
-        let mosi = gpiob.pb5.into_alternate::<5>();
+        let mut spi_config = spi::Config::default();
+        spi_config.frequency = mhz(16);
+        let spi = spi::Spi::new_blocking(p.SPI1, p.PA5, p.PB5, p.PA6, spi_config);
 
-        let spi = dp.SPI1.spi(
-            (sck, miso, mosi),
-            spi::MODE_0,
-            16.MHz(),
-            ccdr.peripheral.SPI1,
-            &ccdr.clocks,
-        );
+        let display_cs = gpio::Output::new(p.PD14, gpio::Level::Low, gpio::Speed::High);
+        let dc = gpio::Output::new(p.PD15, gpio::Level::Low, gpio::Speed::High);
+        let rst = gpio::Output::new(p.PB1, gpio::Level::Low, gpio::Speed::High);
+        let spi_device = ExclusiveDevice::new_no_delay(spi, display_cs).unwrap();
+        let timer2 = timer::low_level::Timer::new(p.TIM2);
+        let mut delay = TimerDelay::new(timer2);
 
-        let display_cs = gpiod.pd14.into_push_pull_output();
-        let dc = gpiod.pd15.into_push_pull_output();
-        let rst = gpiob.pb1.into_push_pull_output();
-        let spi_device =
-            ExclusiveDevice::new_no_delay(spi.forward(), display_cs.forward()).unwrap();
-        let timer2 = dp.TIM2.timer(1.kHz(), ccdr.peripheral.TIM2, &ccdr.clocks);
-        let delay = DelayFromCountDownTimer::new(timer2);
-
-        let interface = SPIInterface::new(spi_device, dc.forward());
+        let interface = SPIInterface::new(spi_device, dc);
         let mut display = Ili9341::new(
             interface,
-            rst.forward(),
-            &mut delay.forward(),
+            rst,
+            &mut delay,
             ili9341::Orientation::Portrait,
             ili9341::DisplaySize240x320,
         )
         .unwrap();
+        debug!("Display Created");
 
         display
             .clear(embedded_graphics::pixelcolor::Rgb565::BLACK)
             .unwrap();
+        debug!("Display Cleared");
 
-        let scl = gpiob.pb8.into_alternate_open_drain(); // I2C1 is AF 4
-        let sda = gpiob.pb9.into_alternate_open_drain();
-        let i2c = dp
-            .I2C1
-            .i2c((scl, sda), 1.MHz(), ccdr.peripheral.I2C1, &ccdr.clocks);
-        let wrapped_i2c = Eh1I2cWrapper::new(i2c);
-
-        let mut dev = FT6x06::new(wrapped_i2c);
+        let i2c = i2c::I2c::new_blocking(p.I2C1, p.PB8, p.PB9, mhz(1), i2c::Config::default());
+        let mut dev = FT6x06::new(i2c);
 
         // Configure the device.
         dev.set_interrupt_mode(InterruptMode::Trigger).unwrap();
@@ -146,8 +127,6 @@ mod app {
         info!("Active Rate: {}", active_rate);
         info!("Monitor Rate: {}", monitor_rate);
 
-        // Get the latest touch data. Usually after receiving an interrupt from the device.
-
         poll_touch::spawn().unwrap();
         (Shared {}, Local { ft6x06: dev })
     }
@@ -162,10 +141,10 @@ mod app {
     }
 
     #[task(priority = 1, local = [ft6x06])]
-    async fn poll_touch(ctx: poll_touch::Context) {
+    async fn poll_touch(cx: poll_touch::Context) {
         loop {
             debug!("Getting touch event");
-            let touch_event = ctx.local.ft6x06.get_touch_event().unwrap();
+            let touch_event = cx.local.ft6x06.get_touch_event().unwrap();
             if let Some(event) = touch_event {
                 info!(
                     "Touch detected at: x: {}, y: {}",
