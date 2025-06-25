@@ -46,6 +46,7 @@ mod app {
     #[local]
     struct Local {
         ft6x06: FT6x06<i2c::I2c<'static, hal::mode::Blocking>>,
+        delay_test: TimerDelay<hal::peripherals::TIM3>,
     }
 
     #[init]
@@ -128,7 +129,19 @@ mod app {
         info!("Monitor Rate: {}", monitor_rate);
 
         poll_touch::spawn().unwrap();
-        (Shared {}, Local { ft6x06: dev })
+
+        let timer3 = timer::low_level::Timer::new(p.TIM3);
+        let delay_test = TimerDelay::new(timer3);
+
+        delay_test::spawn().unwrap();
+
+        (
+            Shared {},
+            Local {
+                ft6x06: dev,
+                delay_test,
+            },
+        )
     }
 
     #[idle]
@@ -137,6 +150,15 @@ mod app {
 
         loop {
             continue;
+        }
+    }
+
+    #[task(priority = 2, local = [delay_test])]
+    async fn delay_test(cx: delay_test::Context) {
+        debug!("Deeeeelay!");
+        loop {
+            debug!("Yipee");
+            cx.local.delay_test.delay_ms(1000);
         }
     }
 
