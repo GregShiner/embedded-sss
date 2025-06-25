@@ -93,12 +93,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1fd0f2584146f6f2ef48085050886acf353beff7305ebd1ae69500e27c67f64b"
 
 [[package]]
-name = "cast"
-version = "0.3.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "37b2a672a2cb129a2e41c10b1224bb368f9f37a2b16b612598138befd7b37eb5"
-
-[[package]]
 name = "cfg-if"
 version = "1.0.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -383,21 +377,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "embedded-display-controller"
-version = "0.2.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "abdb518d44a2eda3b8a5dfc27b60a4bbbf2bb87eee436796d54c290ee6cc6545"
-
-[[package]]
-name = "embedded-dma"
-version = "0.2.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "994f7e5b5cb23521c22304927195f236813053eb9c065dd2226a32ba64695446"
-dependencies = [
- "stable_deref_trait",
-]
-
-[[package]]
 name = "embedded-graphics"
 version = "0.8.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -506,16 +485,6 @@ dependencies = [
  "panic-probe",
  "rtic",
  "rtic-monotonics",
-]
-
-[[package]]
-name = "embedded-sss-old"
-version = "0.1.0"
-dependencies = [
- "cortex-m",
- "cortex-m-rt",
- "rtic",
- "stm32h7xx-hal",
 ]
 
 [[package]]
@@ -695,12 +664,6 @@ dependencies = [
  "cortex-m",
  "defmt 0.3.100",
 ]
-
-[[package]]
-name = "paste"
-version = "1.0.15"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "57c0d7b74b563b49d38dae00a0c37d4d6de9b432382b2892f0574ddcae73fd0a"
 
 [[package]]
 name = "pin-project-lite"
@@ -895,38 +858,6 @@ checksum = "dc520f60f6653a32479a95b9180b33908f0cbbdf106609465ee7dea98f4f5b37"
 dependencies = [
  "cortex-m",
  "cortex-m-rt",
-]
-
-[[package]]
-name = "stm32h7"
-version = "0.15.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "362f288cd8341e9209587b889c385f323e82fc237b60c272868965bb879bb9b1"
-dependencies = [
- "bare-metal 1.0.0",
- "cortex-m",
- "cortex-m-rt",
- "vcell",
-]
-
-[[package]]
-name = "stm32h7xx-hal"
-version = "0.16.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3bd869329be25440b24e2b3583a1c016151b4a54bc36d96d82af7fcd9d010b98"
-dependencies = [
- "bare-metal 1.0.0",
- "cast",
- "cortex-m",
- "embedded-display-controller",
- "embedded-dma",
- "embedded-hal 0.2.7",
- "embedded-storage",
- "fugit",
- "nb 1.1.0",
- "paste",
- "stm32h7",
- "void",
 ]
 
 [[package]]
