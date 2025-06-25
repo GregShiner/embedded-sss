@@ -28,7 +28,7 @@ mod app {
     use display_interface_spi::SPIInterface;
     use embassy_stm32::{self as hal, gpio, i2c, rcc, spi, time::mhz, timer};
     use embedded_graphics::{draw_target::DrawTarget, prelude::*};
-    use embedded_hal::delay::DelayNs;
+    
     use embedded_hal_bus::spi::ExclusiveDevice;
     use embedded_sss::TimerDelay;
     use ft6x06_rs::{ControlMode, FT6x06, InterruptMode};
