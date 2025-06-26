@@ -13,14 +13,7 @@ static SHARED_DATA: MaybeUninit<embassy_stm32::SharedData> = MaybeUninit::uninit
 
 #[rtic::app(
     device = embassy_stm32,
-    // No longer a TODO: Replace the `FreeInterrupt1, ...` with free interrupt vectors if software tasks are used
-    //
-    // You can usually find the names of the interrupt vectors in the some_hal::pac::interrupt enum.
-    //
-    // From greg: These are some probably unused interrupts for weird signal processing stuff
     dispatchers = [DFSDM1_FLT0, DFSDM1_FLT1, DFSDM1_FLT2, DFSDM1_FLT3],
-    // More stuff in here with serial audio stuff
-    // dispatchers = [DFSDM1_FLT0, DFSDM1_FLT1, DFSDM1_FLT2, DFSDM1_FLT3, SPDIF, SAI1, SAI2, SAI3, SAI4]
     peripherals = true
 )]
 mod app {
@@ -28,7 +21,6 @@ mod app {
     use display_interface_spi::SPIInterface;
     use embassy_stm32::{self as hal, gpio, i2c, rcc, spi, time::mhz, timer};
     use embedded_graphics::{draw_target::DrawTarget, prelude::*};
-    
     use embedded_hal_bus::spi::ExclusiveDevice;
     use embedded_sss::TimerDelay;
     use ft6x06_rs::{ControlMode, FT6x06, InterruptMode};
@@ -71,6 +63,7 @@ mod app {
         config.rcc.apb2_pre = rcc::APBPrescaler::DIV2; // D2PRE2
         config.rcc.apb3_pre = rcc::APBPrescaler::DIV2; // D1PRE
         config.rcc.apb4_pre = rcc::APBPrescaler::DIV2; // D3PRE
+        config.rcc.supply_config = rcc::SupplyConfig::DirectSMPS; // THIS MAKES EVERYTHING WORK!
 
         debug!("Initializing HAL...");
         let p = hal::init_primary(config, &SHARED_DATA);
