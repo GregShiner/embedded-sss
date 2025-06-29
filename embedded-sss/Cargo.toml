@@ -20,6 +20,7 @@ ili9341 = "0.6.0"
 panic-probe = { version = "0.3", features = ["print-defmt"] }
 rtic = { version = "2.0.0", features = [ "thumbv7-backend" ] }
 rtic-monotonics = { version = "2.1.0", features = ["cortex-m-systick"] }
+tinybmp = "0.6.0"
 
 # cargo build/run
 [profile.dev]
